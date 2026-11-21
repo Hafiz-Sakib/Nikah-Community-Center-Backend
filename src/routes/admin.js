@@ -94,11 +94,16 @@ r.patch('/payments/:id', async (req, res) => {
   const { status } = paymentReview.parse(req.body)
   const { data: pay } = await supabase.from('payments').select('*').eq('id', req.params.id).maybeSingle()
   if (!pay) throw httpError(404, 'Payment not found')
+  const { data: bk } = await supabase.from('bookings').select('id,total,advance,status').eq('id', pay.booking_id).single()
+  // A verified payment is money in the till: it is final. (Wrongly verified? Record a refund / correction with the customer, do not silently un-verify.)
+  if (pay.status === 'verified' && status !== 'verified') throw httpError(409, 'A verified payment cannot be changed')
   if (status === 'verified' && pay.status !== 'verified') {
+    // A cancelled booking can never be confirmed by a late verification. Reject the payment and refund the customer instead.
+    if (['cancelled', 'expired'].includes(bk.status)) throw httpError(409, 'This booking is cancelled, so the payment cannot be verified. Reject it and refund the customer.')
     // verifying must never push the booking past its total (a cash payment may have been recorded meanwhile)
-    const { data: bk } = await supabase.from('bookings').select('id,total,advance').eq('id', pay.booking_id).single()
     assertRoom(bk, await paymentRows(pay.booking_id), pay.amount, pay.id)
   }
+  if (pay.status === status) return res.json({ payment: toApiPayment(pay), booking: toApi((await supabase.from('bookings').select('*').eq('id', pay.booking_id).single()).data) })
   const { data, error } = await supabase.from('payments').update({
     status, verified_by: req.user.id, verified_at: new Date().toISOString(),
   }).eq('id', pay.id).select().single()

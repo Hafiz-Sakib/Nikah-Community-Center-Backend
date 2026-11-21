@@ -5,6 +5,7 @@ import { dhakaToday, addDays, eventHasEnded } from '../lib/dates.js'
 import { httpError } from '../middleware/error.js'
 import { toApi } from '../lib/mappers.js'
 import { standing, paymentRows } from './paymentService.js'
+import { assertStatusChange, shouldAutoConfirm } from './statusRules.js'
 
 const ACTIVE = ['pending', 'confirmed']
 const newCode = () => 'NCC-' + Math.random().toString(36).slice(2, 8).toUpperCase().padEnd(6, '0')
@@ -40,8 +41,9 @@ export async function createBooking(user, input, { forAdmin = false } = {}) {
     const { data, error } = await supabase.from('bookings').insert({
       ...cols(input), price_snapshot: snap, total: snap.total, advance: snap.advance,
       code: newCode(), user_id: user.id,
-      status: forAdmin ? 'confirmed' : 'pending',
-      hold_expires_at: forAdmin ? null : new Date(Date.now() + env.HOLD_HOURS * 3600_000).toISOString(),
+      // Even a walk-in starts Pending: it is confirmed automatically when the advance payment is recorded / verified.
+      status: 'pending',
+      hold_expires_at: new Date(Date.now() + env.HOLD_HOURS * 3600_000).toISOString(),
     }).select().single()
     if (!error) {
       await logEvent(data.id, user.id, forAdmin ? 'created_by_admin' : 'created', { shift: input.shift, date: input.date })
@@ -95,18 +97,23 @@ export async function updateBooking(user, code, patch, { admin = false } = {}) {
     const st = standing({ total: update.total ?? row.total, advance: adv }, await paymentRows(row.id))
     if (st.verified < adv) { update.status = 'pending'; update.hold_expires_at = new Date(Date.now() + env.HOLD_HOURS * 3600_000).toISOString() }
   }
-  if (admin && status) {
+  if (admin && status && status !== row.status) {
+    // Status is never a free choice: Confirmed needs verified money, Cancelled/Expired is final (see statusRules.js).
+    const verified = standing({ total: row.total, advance: row.advance }, await paymentRows(row.id)).verified
+    assertStatusChange(row.status, status, { verified, advance: update.advance ?? row.advance })
     update.status = status
     if (status === 'cancelled') update.cancelled_at = new Date().toISOString()
     if (status === 'confirmed') update.hold_expires_at = null
-    if (status === 'pending') update.hold_expires_at = new Date(Date.now() + env.HOLD_HOURS * 3600_000).toISOString()   // re-opened: fresh 3-day window, else it would expire again at once
-    if (status === 'pending' || status === 'confirmed') Object.assign(update, { cancelled_at: null, cancel_reason: null })
   }
 
-  const { data, error } = await supabase.from('bookings').update(update).eq('id', row.id).select().single()
+  // Only write if the status is still what we read: a cancel / expiry that landed a moment ago must not be undone by this edit.
+  const { data, error } = await supabase.from('bookings').update(update).eq('id', row.id).eq('status', row.status).select().maybeSingle()
   if (error?.code === '23P01') throw httpError(409, SLOT_TAKEN)
   if (error) throw error
+  if (!data) throw httpError(409, 'This booking just changed. Refresh and try again.')
   await logEvent(row.id, user.id, admin ? 'admin_updated' : 'updated', patch)
+  // A cheaper total can leave a pending booking's verified money above the new advance: confirm it now (never from unverified money)
+  if (data.status === 'pending' && priceChanged) return toApi(await recomputePaid(row.id, user.id))
   return toApi(data)
 }
 
@@ -116,26 +123,34 @@ export async function cancelBooking(user, code, reason, { admin = false } = {}) 
   if (!admin && row.booking_date < dhakaToday()) throw httpError(409, 'This event date has passed')
   const { data, error } = await supabase.from('bookings')
     .update({ status: 'cancelled', cancelled_at: new Date().toISOString(), cancel_reason: reason ?? null })
-    .eq('id', row.id).select().single()
+    .eq('id', row.id).in('status', ACTIVE).select().maybeSingle()
   if (error) throw error
-  await logEvent(row.id, user.id, admin ? 'admin_cancelled' : 'cancelled', { reason })
+  if (!data) throw httpError(409, 'This booking just changed. Refresh and try again.')
+  await logEvent(row.id, user.id, admin ? 'admin_cancelled' : 'cancelled', { reason, paid: row.paid_amount })
   return toApi(data)
 }
 
-/* sum verified payments -> paid_amount; auto-confirm when advance is covered */
+/* Sum VERIFIED payments -> paid_amount, then confirm a pending booking whose advance is covered by verified money.
+   This is the only place a booking becomes Confirmed. Every status write is conditional on the status we read
+   (.eq('status', ...)), so a cancel / expiry that lands at the same moment can never be turned back into Confirmed. */
 export async function recomputePaid(bookingId, actorId) {
   const { data: pays, error: e1 } = await supabase.from('payments').select('amount').eq('booking_id', bookingId).eq('status', 'verified')
   if (e1) throw e1
   const paid = pays.reduce((s, p) => s + p.amount, 0)
-  const { data: row, error: e2 } = await supabase.from('bookings').select('id,status,advance,booking_date,shift').eq('id', bookingId).single()
+  const { data: row, error: e2 } = await supabase.from('bookings').update({ paid_amount: paid }).eq('id', bookingId).select().single()
   if (e2) throw e2
-  const update = { paid_amount: paid }
-  if (row.status === 'pending' && paid >= row.advance) { update.status = 'confirmed'; update.hold_expires_at = null }
+  let cur = row
+  const step = async (from, patch) => {
+    const { data, error } = await supabase.from('bookings').update(patch).eq('id', bookingId).eq('status', from).select().maybeSingle()
+    if (error) throw error
+    if (data) cur = data
+    return !!data
+  }
+  if (shouldAutoConfirm(cur, paid)) {
+    if (await step('pending', { status: 'confirmed', hold_expires_at: null })) await logEvent(bookingId, actorId, 'auto_confirmed', { paid, advance: cur.advance })
+  }
   // The shift is already over and the advance is in: a successful event, so it is Completed straight away (no waiting for the next sweep)
-  if ((update.status ?? row.status) === 'confirmed' && eventHasEnded(row.booking_date, row.shift)) update.status = 'completed'
-  const { data, error } = await supabase.from('bookings').update(update).eq('id', bookingId).select().single()
-  if (error) throw error
-  await logEvent(bookingId, actorId, 'payment_recomputed', { paid, status: data.status })
-  return data
+  if (cur.status === 'confirmed' && eventHasEnded(cur.booking_date, cur.shift)) await step('confirmed', { status: 'completed' })
+  await logEvent(bookingId, actorId, 'payment_recomputed', { paid, status: cur.status })
+  return cur
 }
-

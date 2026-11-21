@@ -168,3 +168,25 @@ end $$;
 drop trigger if exists t_payments_guard on public.payments;
 create trigger t_payments_guard before insert or update of amount, status, booking_id on public.payments
   for each row execute function public.guard_payment_total();
+
+-- ============ booking status guard (migration 006) ============
+create or replace function public.guard_booking_status()
+returns trigger language plpgsql as $$
+declare v int;
+begin
+  if new.status = old.status then return new; end if;
+  if old.status in ('cancelled','expired') then
+    raise exception 'A cancelled booking cannot be confirmed or re-opened' using errcode = 'P0001';
+  end if;
+  if new.status = 'confirmed' then
+    select coalesce(sum(amount), 0) into v from public.payments where booking_id = new.id and status = 'verified';
+    if v < new.advance then
+      raise exception 'A booking is confirmed only when its advance payment is verified' using errcode = 'P0001';
+    end if;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists t_bookings_status_guard on public.bookings;
+create trigger t_bookings_status_guard before update of status on public.bookings
+  for each row execute function public.guard_booking_status();
