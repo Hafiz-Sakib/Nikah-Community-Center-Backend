@@ -5,7 +5,7 @@ import { dhakaToday, addDays, eventHasEnded } from '../lib/dates.js'
 import { httpError } from '../middleware/error.js'
 import { toApi } from '../lib/mappers.js'
 import { standing, paymentRows } from './paymentService.js'
-import { assertStatusChange, shouldAutoConfirm } from './statusRules.js'
+import { assertStatusChange, shouldAutoConfirm, cancelWindowClosed, CLOSED } from './statusRules.js'
 
 const ACTIVE = ['pending', 'confirmed']
 const newCode = () => 'NCC-' + Math.random().toString(36).slice(2, 8).toUpperCase().padEnd(6, '0')
@@ -66,6 +66,8 @@ export async function loadBooking(user, code, admin = false) {
 
 export async function updateBooking(user, code, patch, { admin = false } = {}) {
   const row = await loadBooking(user, code, admin)
+  // A cancelled booking is closed for good, for staff and customer alike. If the customer still wants the date they book it again.
+  if (CLOSED.includes(row.status)) throw httpError(409, 'A cancelled booking cannot be edited. The date is free again, so a new booking can be made.')
   if (!admin) {
     if (!ACTIVE.includes(row.status)) throw httpError(409, `A ${row.status} booking can't be edited`)
     if (row.booking_date < addDays(dhakaToday(), env.EDIT_CUTOFF_DAYS))
@@ -121,6 +123,8 @@ export async function cancelBooking(user, code, reason, { admin = false } = {}) 
   const row = await loadBooking(user, code, admin)
   if (!ACTIVE.includes(row.status)) throw httpError(409, `Already ${row.status}`)
   if (!admin && row.booking_date < dhakaToday()) throw httpError(409, 'This event date has passed')
+  if (!admin && cancelWindowClosed(row.booking_date, dhakaToday(), addDays, env.CANCEL_CUTOFF_DAYS))
+    throw httpError(403, `Cancellations close ${env.CANCEL_CUTOFF_DAYS} days before the event. Please call us.`)
   const { data, error } = await supabase.from('bookings')
     .update({ status: 'cancelled', cancelled_at: new Date().toISOString(), cancel_reason: reason ?? null })
     .eq('id', row.id).in('status', ACTIVE).select().maybeSingle()
@@ -153,4 +157,20 @@ export async function recomputePaid(bookingId, actorId) {
   if (cur.status === 'confirmed' && eventHasEnded(cur.booking_date, cur.shift)) await step('confirmed', { status: 'completed' })
   await logEvent(bookingId, actorId, 'payment_recomputed', { paid, status: cur.status })
   return cur
+}
+
+/* Staff mark that the money of a cancelled booking has been paid back to the customer. Only verified money is ever refunded. */
+export async function markRefunded(user, code) {
+  const row = await loadBooking(user, code, true)
+  if (!CLOSED.includes(row.status)) throw httpError(409, 'Only a cancelled booking can be refunded')
+  if (row.refunded_at) throw httpError(409, 'This booking is already marked as refunded')
+  const verified = standing({ total: row.total, advance: row.advance }, await paymentRows(row.id)).verified
+  if (verified <= 0) throw httpError(409, 'No verified payment on this booking. Nothing to refund.')
+  const { data, error } = await supabase.from('bookings')
+    .update({ refunded_at: new Date().toISOString(), refunded_amount: verified })
+    .eq('id', row.id).in('status', CLOSED).is('refunded_at', null).select().maybeSingle()
+  if (error) throw error
+  if (!data) throw httpError(409, 'This booking just changed. Refresh and try again.')
+  await logEvent(row.id, user.id, 'refund_recorded', { amount: verified })
+  return toApi(data)
 }

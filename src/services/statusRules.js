@@ -33,3 +33,16 @@ export function assertStatusChange(from, to, { verified = 0, advance = 0 } = {})
 
 /** Pure. Should a PENDING booking be confirmed right now? Only verified money counts. */
 export const shouldAutoConfirm = ({ status, advance }, verified) => status === 'pending' && verified >= advance
+
+/** Pure. A customer can no longer cancel once the event is `cutoff` days away or closer (staff can always cancel). */
+export const cancelWindowClosed = (bookingDate, today, addDaysFn, cutoff) => bookingDate <= addDaysFn(today, cutoff)
+
+/** Pure. Why a booking may NOT be permanently deleted yet (or null when it may).
+    Only cancelled / expired bookings can be deleted, and never while money is unsettled:
+    verified money must be marked as refunded first, and a payment still waiting for review must be rejected first. */
+export function deleteBlocker({ status, verified = 0, pending = 0, refunded = false }) {
+  if (!CLOSED.includes(status)) return 'Only a cancelled booking can be deleted. Cancel it first.'
+  if (pending > 0) return 'A payment is still waiting for verification. Reject it first, then delete.'
+  if (verified > 0 && !refunded) return 'The customer has paid money that is not marked as refunded yet. Refund it and mark it refunded first.'
+  return null
+}

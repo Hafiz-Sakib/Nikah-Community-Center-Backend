@@ -36,3 +36,23 @@ test('auto-confirm: only a pending booking, only verified money >= advance', () 
   assert.equal(shouldAutoConfirm({ status: 'expired', advance: 100 }, 500), false)
   assert.equal(shouldAutoConfirm({ status: 'completed', advance: 100 }, 500), false)
 })
+
+const { cancelWindowClosed, deleteBlocker } = await import('../src/services/statusRules.js')
+const { addDays } = await import('../src/lib/dates.js')
+test('customer cancel window closes 3 days before the event', () => {
+  const today = '2026-11-21'
+  assert.equal(cancelWindowClosed('2026-11-22', today, addDays, 3), true)    // tomorrow
+  assert.equal(cancelWindowClosed('2026-11-24', today, addDays, 3), true)    // exactly 3 days away: closed
+  assert.equal(cancelWindowClosed('2026-11-25', today, addDays, 3), false)   // 4 days away: still open
+  assert.equal(cancelWindowClosed('2026-12-10', today, addDays, 3), false)
+})
+test('delete: only cancelled bookings, and never with unsettled money', () => {
+  assert.match(deleteBlocker({ status: 'pending' }), /Cancel it first/)
+  assert.match(deleteBlocker({ status: 'confirmed', verified: 0 }), /Cancel it first/)
+  assert.match(deleteBlocker({ status: 'completed' }), /Cancel it first/)
+  assert.equal(deleteBlocker({ status: 'cancelled' }), null)
+  assert.equal(deleteBlocker({ status: 'expired' }), null)
+  assert.match(deleteBlocker({ status: 'cancelled', verified: 1000 }), /not marked as refunded/)
+  assert.equal(deleteBlocker({ status: 'cancelled', verified: 1000, refunded: true }), null)
+  assert.match(deleteBlocker({ status: 'cancelled', pending: 500, refunded: true }), /waiting for verification/)
+})

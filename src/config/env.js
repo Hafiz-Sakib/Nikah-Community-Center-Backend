@@ -8,5 +8,6 @@ export const env = z.object({
   CLIENT_ORIGINS: z.string().default('http://localhost:5173'),
   HOLD_HOURS: z.coerce.number().min(1).default(48),   // unpaid pending booking is auto-cancelled after this many hours (48 h)
   EDIT_CUTOFF_DAYS: z.coerce.number().default(3),
+  CANCEL_CUTOFF_DAYS: z.coerce.number().default(3),   // a customer cannot cancel when the event is this many days away or closer (staff can)
   MAX_PENDING_PER_USER: z.coerce.number().default(3),
 }).parse(process.env)

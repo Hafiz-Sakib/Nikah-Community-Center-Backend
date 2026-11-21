@@ -11,7 +11,7 @@ export const toApi = (r, payments) => ({
   packageId: r.package_id, shift: r.shift, date: r.booking_date, guests: r.guests,
   addons: r.addons, catering: r.catering, menu: r.menu_id,
   name: r.contact_name, phone: r.contact_phone, email: r.contact_email ?? '', notes: r.notes ?? '',
-  total: r.total, advance: r.advance, paidAmount: r.paid_amount, holdExpiresAt: r.hold_expires_at, cancelReason: r.cancel_reason ?? null, holdHours: env.HOLD_HOURS,
+  total: r.total, advance: r.advance, paidAmount: r.paid_amount, holdExpiresAt: r.hold_expires_at, cancelReason: r.cancel_reason ?? null, refundedAt: r.refunded_at ?? null, refundedAmount: r.refunded_amount ?? null, cancelCutoffDays: env.CANCEL_CUTOFF_DAYS, holdHours: env.HOLD_HOURS,
   priceSnapshot: r.price_snapshot,
   ...(payments ? { payments: payments.slice().sort((a, b) => a.created_at.localeCompare(b.created_at)).map(toApiPayment) } : {}),
 })

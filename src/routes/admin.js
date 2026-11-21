@@ -1,12 +1,13 @@
 import { Router } from 'express'
 import { supabase } from '../lib/supabase.js'
 import { bookingInput, adminBookingPatch, adminPaymentInput, paymentReview, adminList, cancelInput } from '../schemas.js'
-import { createBooking, updateBooking, cancelBooking, loadBooking, recomputePaid, logEvent } from '../services/bookingService.js'
+import { createBooking, updateBooking, cancelBooking, loadBooking, recomputePaid, logEvent, markRefunded } from '../services/bookingService.js'
 import { toApi, toApiPayment } from '../lib/mappers.js'
 import { dhakaToday, addDays } from '../lib/dates.js'
 import { sweepHolds, sweepCompleted } from '../services/sweep.js'
 import { httpError } from '../middleware/error.js'
-import { paymentRows, assertRoom, assertFreshReference, mapPaymentDbError } from '../services/paymentService.js'
+import { paymentRows, assertRoom, assertFreshReference, mapPaymentDbError, standing } from '../services/paymentService.js'
+import { deleteBlocker } from '../services/statusRules.js'
 
 const r = Router()
 
@@ -57,13 +58,18 @@ r.patch('/bookings/:id', async (req, res) => {
 // POST /admin/bookings/:id/cancel
 r.post('/bookings/:id/cancel', async (req, res) => res.json(await cancelBooking(req.user, req.params.id, cancelInput.parse(req.body).reason, { admin: true })))
 
-// DELETE /admin/bookings/:id  (hard delete, payments cascade)
+// POST /admin/bookings/:id/refund  (cancelled booking: the verified money has been paid back to the customer)
+r.post('/bookings/:id/refund', async (req, res) => res.json(await markRefunded(req.user, req.params.id)))
+
+// DELETE /admin/bookings/:id  (permanent: the booking, its payments and its history are erased)
 r.delete('/bookings/:id', async (req, res) => {
   const row = await loadBooking(req.user, req.params.id, true)
-  // Confirmed / completed bookings and anything with money received are business records: they are kept forever.
-  if (['confirmed', 'completed'].includes(row.status) || row.paid_amount > 0)
-    throw httpError(409, 'Confirmed, completed or paid bookings are kept for the records and cannot be deleted')
-  const { error } = await supabase.from('bookings').delete().eq('id', row.id)
+  // Only cancelled / expired bookings can go, and never with unsettled money. Confirmed / completed bookings are business records kept forever.
+  const rows = await paymentRows(row.id)
+  const s = standing({ total: row.total, advance: row.advance }, rows)
+  const why = deleteBlocker({ status: row.status, verified: s.verified, pending: s.pending, refunded: !!row.refunded_at })
+  if (why) throw httpError(409, why)
+  const { error } = await supabase.from('bookings').delete().eq('id', row.id).in('status', ['cancelled', 'expired'])
   if (error) throw error
   res.json({ ok: true })
 })

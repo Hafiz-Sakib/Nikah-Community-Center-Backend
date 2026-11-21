@@ -56,6 +56,8 @@ create table public.bookings (
   hold_expires_at timestamptz,
   cancelled_at timestamptz,
   cancel_reason text,
+  refunded_at timestamptz,        -- set when staff paid the verified money back after a cancellation (migration 007)
+  refunded_amount int,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
 
