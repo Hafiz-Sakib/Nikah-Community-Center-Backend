@@ -17,6 +17,7 @@ const own = (req) => loadBooking(req.user, req.params.id)
 r.post('/', async (req, res) => res.status(201).json(await createBooking(req.user, bookingInput.parse(req.body))))
 
 r.get('/', async (req, res) => {
+  await supabase.rpc('expire_stale_holds')
   const { data, error } = await supabase.from('bookings').select('*, payments(*)')
     .eq('user_id', req.user.id).order('booking_date', { ascending: false })
   if (error) throw error

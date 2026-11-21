@@ -11,7 +11,8 @@ const r = Router()
 // GET /admin/bookings?status=&q=&from=&to=&page=&pageSize=
 r.get('/bookings', async (req, res) => {
   const f = adminList.parse(req.query)
-  let q = supabase.from('bookings').select('*, payments(*)', { count: 'exact' })
+  await supabase.rpc('expire_stale_holds')   // release unpaid holds so the list never shows an expired hold as pending
+  let q = supabase.from('bookings').select('*, payments(*), profiles(avatar_url)', { count: 'exact' })
   if (f.status) q = q.eq('status', f.status)
   if (f.from) q = q.gte('booking_date', f.from)
   if (f.to) q = q.lte('booking_date', f.to)
@@ -22,7 +23,7 @@ r.get('/bookings', async (req, res) => {
   const from = (f.page - 1) * f.pageSize
   const { data, count, error } = await q.order('booking_date', { ascending: false }).order('created_at', { ascending: false }).range(from, from + f.pageSize - 1)
   if (error) throw error
-  res.json({ items: data.map(({ payments, ...row }) => toApi(row, payments)), total: count ?? 0, page: f.page, pageSize: f.pageSize })
+  res.json({ items: data.map(({ payments, profiles, ...row }) => ({ ...toApi(row, payments), avatar: (Array.isArray(profiles) ? profiles[0] : profiles)?.avatar_url ?? null })), total: count ?? 0, page: f.page, pageSize: f.pageSize })
 })
 
 // POST /admin/bookings  (walk-in)

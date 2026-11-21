@@ -13,13 +13,13 @@ API for Nikah Community Center. Auth = Supabase (Google + email/password). Expre
 4. `npm test` (no Supabase needed: validation, pricing, auth guards).
 
 ## Deploy (Render free)
-Root `server/`, build `npm i`, start `node src/index.js`, add env vars, put Vercel URL in `CLIENT_ORIGINS`.
+Root directory = this repo, build `npm i`, start `node src/index.js`, add env vars, put Vercel URL in `CLIENT_ORIGINS`.
 Free tier sleeps after ~15 min idle (first call 30–60 s). `.github/workflows/keepalive.yml` pings `/api/health` every 3 days (needed so Supabase does not pause) — add repo secret `API_URL`.
 
 ## Endpoints (`/api`)
 Public: `GET /health`, `GET /availability?from&to`
 User: `GET|PATCH /me`, `POST|GET /bookings`, `GET|PATCH /bookings/:id`, `POST /bookings/:id/cancel`, `GET /bookings/:id/invoice`, `POST /bookings/:id/payments`
-Admin: `GET|POST /admin/bookings`, `PATCH|DELETE /admin/bookings/:id`, `POST /admin/bookings/:id/cancel`, `POST /admin/bookings/:id/payments`, `PATCH /admin/payments/:id`, `GET /admin/stats`
+Admin: `GET|POST /admin/bookings` (list rows include `avatar`, the booker's Google photo), `PATCH|DELETE /admin/bookings/:id`, `POST /admin/bookings/:id/cancel`, `POST /admin/bookings/:id/payments`, `PATCH /admin/payments/:id`, `GET /admin/stats`
 
 Booking `:id` = public code (`NCC-AB12CD`).
 
@@ -30,4 +30,3 @@ Booking `:id` = public code (`NCC-AB12CD`).
 - Verified payments ≥ advance → booking auto-`confirmed`.
 - User edit: pending/confirmed, ≥ `EDIT_CUTOFF_DAYS` before event. Confirmed + date/shift/package change → back to `pending`.
 - Users never hard-delete (delete = cancel). Admin can.
-# NCC-Backend
