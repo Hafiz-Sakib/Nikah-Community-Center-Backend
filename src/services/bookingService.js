@@ -84,6 +84,8 @@ export async function updateBooking(user, code, patch, { admin = false } = {}) {
     update.status = status
     if (status === 'cancelled') update.cancelled_at = new Date().toISOString()
     if (status === 'confirmed') update.hold_expires_at = null
+    if (status === 'pending') update.hold_expires_at = new Date(Date.now() + env.HOLD_HOURS * 3600_000).toISOString()   // re-opened: fresh 3-day window, else it would expire again at once
+    if (status === 'pending' || status === 'confirmed') Object.assign(update, { cancelled_at: null, cancel_reason: null })
   }
 
   const { data, error } = await supabase.from('bookings').update(update).eq('id', row.id).select().single()

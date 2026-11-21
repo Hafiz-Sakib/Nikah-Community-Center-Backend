@@ -75,6 +75,7 @@ r.patch('/payments/:id', async (req, res) => {
 
 // GET /admin/stats
 r.get('/stats', async (_req, res) => {
+  await supabase.rpc('expire_stale_holds')
   const { data, error } = await supabase.from('bookings').select('status,total,paid_amount,booking_date')
   if (error) throw error
   const today = dhakaToday(), horizon = addDays(today, 30)

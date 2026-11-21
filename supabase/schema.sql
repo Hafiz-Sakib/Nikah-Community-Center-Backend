@@ -113,16 +113,28 @@ create trigger t_profiles_touch before update on public.profiles for each row ex
 create trigger t_bookings_touch before update on public.bookings for each row execute function public.touch_updated_at();
 
 -- ============ expire unpaid holds ============
--- Pending bookings with no verified payment AND no payment waiting for admin review
--- release their slot after hold_expires_at.
+-- A pending booking holds its slot for HOLD_HOURS (default 72 h = 3 days, set in the API .env).
+-- When hold_expires_at passes and there is NO verified payment AND NO payment waiting for admin review,
+-- the booking is auto-cancelled (status = 'expired') and the date/shift is free again.
+-- It runs lazily on every availability / booking-list / create call, so no cron job is required.
 create or replace function public.expire_stale_holds()
 returns int language plpgsql security definer set search_path = public as $$
 declare n int;
 begin
-  update public.bookings b set status = 'expired'
-   where b.status = 'pending' and b.paid_amount = 0 and b.hold_expires_at < now()
-     and not exists (select 1 from public.payments p where p.booking_id = b.id and p.status = 'pending');
-  get diagnostics n = row_count;
+  with gone as (
+    update public.bookings b
+       set status = 'expired',
+           cancelled_at = now(),
+           cancel_reason = 'Auto-cancelled: advance not paid in time'
+     where b.status = 'pending' and b.paid_amount = 0 and b.hold_expires_at < now()
+       and not exists (select 1 from public.payments p where p.booking_id = b.id and p.status = 'pending')
+    returning b.id, b.booking_date, b.shift
+  ), logged as (
+    insert into public.booking_events (booking_id, actor_id, action, detail)
+    select id, null, 'auto_expired', jsonb_build_object('date', booking_date, 'shift', shift) from gone
+    returning 1
+  )
+  select count(*) into n from logged;
   return n;
 end $$;
 revoke execute on function public.expire_stale_holds() from public, anon, authenticated;
