@@ -34,6 +34,13 @@ export function assertRoom(row, rows, amount, skipId = null) {
   return s
 }
 
+/** A customer's TrxID must look like a real receipt number: not their own Booking ID (a common slip) and not too short. */
+export function assertTrxReference(reference) {
+  const ref = String(reference ?? '').toUpperCase()
+  if (/^NCC-[A-Z0-9]{6}$/.test(ref)) throw httpError(400, 'That is your Booking ID, not a transaction ID. Enter the TrxID from your bKash, Nagad or bank receipt.')
+  if (ref.replace(/[^A-Z0-9]/g, '').length < 6) throw httpError(400, 'Enter at least 6 letters or digits from the receipt.')
+}
+
 /** A transaction ID can be claimed once: stops the same bKash / Nagad receipt being submitted twice. */
 export async function assertFreshReference(method, reference, skipId = null) {
   if (!reference || method === 'office') return

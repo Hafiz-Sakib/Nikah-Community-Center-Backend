@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 process.env.SUPABASE_URL = 'http://127.0.0.1:9'; process.env.SUPABASE_SERVICE_ROLE_KEY = 'x'.repeat(40)
-const { standing, assertRoom, tk } = await import('../src/services/paymentService.js')
+const { standing, assertRoom, assertTrxReference, tk } = await import('../src/services/paymentService.js')
 const { adminPaymentInput, paymentInput } = await import('../src/schemas.js')
 
 const bk = { total: 238000, advance: 71400 }
@@ -44,4 +44,12 @@ test('amount must be a positive whole taka', () => {
   assert.throws(() => paymentInput.parse({ amount: 10.5, method: 'bkash' }))
   assert.equal(adminPaymentInput.parse({ amount: '500', method: 'office', note: ' cash ' }).note, 'cash')
   assert.equal(tk(238000), '৳2,38,000')
+})
+
+test('a TrxID cannot be the booking ID or too short', () => {
+  assert.throws(() => assertTrxReference('NCC-KP43JT'), /Booking ID/)
+  assert.throws(() => assertTrxReference('ncc-kp43jt'), /Booking ID/)
+  assert.throws(() => assertTrxReference('AB-12'), /at least 6/)
+  assert.doesNotThrow(() => assertTrxReference('9A7K2M4XQP'))
+  assert.doesNotThrow(() => assertTrxReference('TXN-AB12CD34'))
 })

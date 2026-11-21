@@ -5,7 +5,7 @@ import { createBooking, updateBooking, cancelBooking, loadBooking, logEvent } fr
 import { sweepHolds, sweepCompleted } from '../services/sweep.js'
 import { toApi } from '../lib/mappers.js'
 import { httpError } from '../middleware/error.js'
-import { standing, paymentRows, assertFreshReference, mapPaymentDbError, tk } from '../services/paymentService.js'
+import { standing, paymentRows, assertFreshReference, assertTrxReference, mapPaymentDbError, tk } from '../services/paymentService.js'
 
 const r = Router()
 const MAX_PENDING_PAYMENTS = 3
@@ -50,6 +50,7 @@ r.post('/:id/payments', async (req, res) => {
   if (p.method === 'office') throw httpError(400, 'Office payments are recorded by our staff when you pay at the venue')
   if (!p.reference) throw httpError(400, 'Enter the transaction ID')
   p.reference = p.reference.toUpperCase()
+  assertTrxReference(p.reference)
 
   const rows = await paymentRows(row.id)
   const s = standing(row, rows)
