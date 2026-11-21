@@ -150,7 +150,7 @@ stateDiagram-v2
     pending --> expired: 48 hours pass, nothing paid, nothing submitted for review
     pending --> cancelled: user or admin cancels
     confirmed --> pending: user changes date, shift or package
-    confirmed --> completed: admin marks the event done
+    confirmed --> completed: the shift ends (auto, Dhaka time) or admin marks it done. A fully paid event that has finished is a successful, completed event
     confirmed --> cancelled: user or admin cancels
     expired --> pending: admin re-opens (fresh 48-hour hold)
 ```

@@ -46,3 +46,16 @@ test('package guest limits and event fit', async () => {
   assert.equal(packageFits('nope', 'Other'), false)
   assert.throws(() => bookingInput.parse({ eventType: 'Wedding', packageId: 'wedding-plus', date: '2027-01-04', shift: 'morning', guests: 2001, name: 'Ali', phone: '01712345678' }))
 })
+
+test('eventHasEnded: a booking is over once its shift has finished (Dhaka time)', async () => {
+  process.env.SUPABASE_URL = 'http://127.0.0.1:9'; process.env.SUPABASE_SERVICE_ROLE_KEY = 'x'.repeat(40)
+  const { eventHasEnded } = await import('../src/lib/dates.js')
+  const today = '2026-11-23'
+  assert.equal(eventHasEnded('2026-11-22', 'evening', today, 0), true)           // earlier day
+  assert.equal(eventHasEnded('2026-11-24', 'morning', today, 23 * 60), false)    // later day
+  assert.equal(eventHasEnded(today, 'morning', today, 14 * 60 + 59), false)      // morning shift still running
+  assert.equal(eventHasEnded(today, 'morning', today, 15 * 60), true)            // morning shift over at 3 PM
+  assert.equal(eventHasEnded(today, 'evening', today, 22 * 60 + 29), false)
+  assert.equal(eventHasEnded(today, 'evening', today, 22 * 60 + 30), true)       // evening over at 10:30 PM
+  assert.equal(eventHasEnded(today, 'full', today, 16 * 60), false)              // full day runs to the evening
+})

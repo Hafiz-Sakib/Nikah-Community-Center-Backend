@@ -28,7 +28,10 @@ r.get('/', async (req, res) => {
   res.json(data.map(({ payments, ...row }) => toApi(row, payments)))
 })
 
-r.get('/:id', async (req, res) => res.json(await withPayments(await own(req))))
+r.get('/:id', async (req, res) => {
+  await sweepCompleted()   // a single booking page must show Completed as soon as its shift is over
+  res.json(await withPayments(await own(req)))
+})
 r.patch('/:id', async (req, res) => res.json(await updateBooking(req.user, req.params.id, bookingPatch.parse(req.body))))
 r.post('/:id/cancel', async (req, res) => res.json(await cancelBooking(req.user, req.params.id, cancelInput.parse(req.body).reason)))
 

@@ -1,7 +1,7 @@
 import { supabase } from '../lib/supabase.js'
 import { env } from '../config/env.js'
 import { buildQuote, packageFits, PACKAGES } from '../config/pricing.js'
-import { dhakaToday, addDays } from '../lib/dates.js'
+import { dhakaToday, addDays, eventHasEnded } from '../lib/dates.js'
 import { httpError } from '../middleware/error.js'
 import { toApi } from '../lib/mappers.js'
 import { standing, paymentRows } from './paymentService.js'
@@ -127,10 +127,12 @@ export async function recomputePaid(bookingId, actorId) {
   const { data: pays, error: e1 } = await supabase.from('payments').select('amount').eq('booking_id', bookingId).eq('status', 'verified')
   if (e1) throw e1
   const paid = pays.reduce((s, p) => s + p.amount, 0)
-  const { data: row, error: e2 } = await supabase.from('bookings').select('id,status,advance').eq('id', bookingId).single()
+  const { data: row, error: e2 } = await supabase.from('bookings').select('id,status,advance,booking_date,shift').eq('id', bookingId).single()
   if (e2) throw e2
   const update = { paid_amount: paid }
   if (row.status === 'pending' && paid >= row.advance) { update.status = 'confirmed'; update.hold_expires_at = null }
+  // The shift is already over and the advance is in: a successful event, so it is Completed straight away (no waiting for the next sweep)
+  if ((update.status ?? row.status) === 'confirmed' && eventHasEnded(row.booking_date, row.shift)) update.status = 'completed'
   const { data, error } = await supabase.from('bookings').update(update).eq('id', bookingId).select().single()
   if (error) throw error
   await logEvent(bookingId, actorId, 'payment_recomputed', { paid, status: data.status })
