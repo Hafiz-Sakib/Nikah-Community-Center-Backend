@@ -8,10 +8,14 @@ export async function requireAuth(req, _res, next) {
 
   // Supabase validates signature + expiry. One network call per request: fine for a hobby app.
   const { data, error } = await supabase.auth.getUser(token)
+  if (error || !data?.user) console.warn("[auth] getUser failed:", error?.message)
+  if (error || !data?.user) console.warn("[auth] getUser failed:", error?.message)
   if (error || !data?.user) throw httpError(401, 'Session expired, please log in again')
 
-  const { data: profile } = await supabase.from('profiles')
+  const { data: profile, error: pErr } = await supabase.from('profiles')
     .select('id,email,full_name,avatar_url,phone,role').eq('id', data.user.id).maybeSingle()
+  if (!profile) console.warn("[auth] profile lookup failed:", pErr?.message, data.user.id)
+  if (!profile) console.warn("[auth] profile lookup failed:", pErr?.message, data.user.id)
   if (!profile) throw httpError(401, 'Account not ready, please log in again')
 
   req.user = { id: data.user.id, email: data.user.email, role: profile.role ?? 'user', profile }
