@@ -80,7 +80,7 @@ Nikah-Community-Center-Backend/
 
 1. **Supabase** (free): create a project and note the Project URL, anon key and service_role key.
    - Auth → Providers: enable Email and Google (redirect URI `https://<ref>.supabase.co/auth/v1/callback`).
-   - Auth → URL Configuration: Site URL `https://nikah-convention.vercel.app`; Redirect URLs `http://localhost:5173/**` and `https://nikah-convention.vercel.app/**`.
+   - Auth → URL Configuration: Site URL `https://nikah-convention.vercel.app`; Redirect URLs `http://localhost:5173/**`, `http://localhost:3000/**` and `https://nikah-convention.vercel.app/**`. If Site URL is left as localhost, Google login on the live site bounces to localhost.
    - SQL Editor → run `supabase/schema.sql`.
    - Sign up once in the app, then make yourself admin:
      ```sql
