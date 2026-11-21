@@ -6,6 +6,8 @@ import { httpError } from '../middleware/error.js'
 
 const r = Router()
 // Public: only booked days, no personal data.
+// A slot counts as taken while its booking is pending (payment hold), confirmed or completed.
+// Expired / cancelled bookings are not listed, so their slot is free again.
 r.get('/', async (req, res) => {
   const { from, to } = dateRange.parse(req.query)
   const span = daysBetween(from, to)
@@ -21,6 +23,6 @@ r.get('/', async (req, res) => {
     if (b.shift === 'full') d.morning = d.evening = true
     else d[b.shift] = true
   }
-  res.set('Cache-Control', 'public, max-age=20').json(Object.values(days))
+  res.set('Cache-Control', 'no-store')   // a freshly held slot must disappear for everyone at once.json(Object.values(days))
 })
 export default r

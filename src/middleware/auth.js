@@ -16,6 +16,15 @@ export async function requireAuth(req, _res, next) {
   if (!profile) console.warn("[auth] profile lookup failed:", pErr?.message, data.user.id)
   if (!profile) throw httpError(401, 'Account not ready, please log in again')
 
+  // Keep the profile photo in step with the Google account: the DB trigger only copies it at sign-up,
+  // so older users (or users who later changed their Google photo) would otherwise show initials in the admin panel.
+  const meta = data.user.user_metadata ?? {}
+  const photo = meta.avatar_url || meta.picture || null
+  if (photo && photo !== profile.avatar_url) {
+    profile.avatar_url = photo
+    supabase.from('profiles').update({ avatar_url: photo }).eq('id', data.user.id).then(() => {}, () => {})
+  }
+
   req.user = { id: data.user.id, email: data.user.email, role: profile.role ?? 'user', profile }
   next()
 }

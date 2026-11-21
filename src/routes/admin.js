@@ -20,7 +20,9 @@ r.get('/bookings', async (req, res) => {
     if (!ids.length) return res.json({ items: [], total: 0, page: f.page, pageSize: f.pageSize })
     q = q.in('id', ids)
   }
-  if (f.status) q = q.eq('status', f.status)
+  // An unpaid booking that timed out is shown to everyone as "Cancelled", so the Cancelled filter covers both.
+  if (f.status === 'cancelled') q = q.in('status', ['cancelled', 'expired'])
+  else if (f.status) q = q.eq('status', f.status)
   if (f.from) q = q.gte('booking_date', f.from)
   if (f.to) q = q.lte('booking_date', f.to)
   if (f.q) {
@@ -30,7 +32,13 @@ r.get('/bookings', async (req, res) => {
   const from = (f.page - 1) * f.pageSize
   const { data, count, error } = await q.order('booking_date', { ascending: false }).order('created_at', { ascending: false }).range(from, from + f.pageSize - 1)
   if (error) throw error
-  res.json({ items: data.map(({ payments, profiles, ...row }) => ({ ...toApi(row, payments), avatar: (Array.isArray(profiles) ? profiles[0] : profiles)?.avatar_url ?? null })), total: count ?? 0, page: f.page, pageSize: f.pageSize })
+  // Walk-in bookings are created under the staff member's own account, so their photo must not be shown for the guest.
+  const walkIn = new Set()
+  if (data.length) {
+    const { data: ev } = await supabase.from('booking_events').select('booking_id').eq('action', 'created_by_admin').in('booking_id', data.map((x) => x.id))
+    for (const e of ev ?? []) walkIn.add(e.booking_id)
+  }
+  res.json({ items: data.map(({ payments, profiles, ...row }) => ({ ...toApi(row, payments), avatar: walkIn.has(row.id) ? null : (Array.isArray(profiles) ? profiles[0] : profiles)?.avatar_url ?? null })), total: count ?? 0, page: f.page, pageSize: f.pageSize })
 })
 
 // POST /admin/bookings  (walk-in)
