@@ -13,6 +13,13 @@ r.get('/bookings', async (req, res) => {
   const f = adminList.parse(req.query)
   await supabase.rpc('expire_stale_holds')   // release unpaid holds so the list never shows an expired hold as pending
   let q = supabase.from('bookings').select('*, payments(*), profiles(avatar_url)', { count: 'exact' })
+  if (f.verify) {                                   // "To verify" queue: bookings with a submitted payment waiting for review
+    const { data: waiting, error: ew } = await supabase.from('payments').select('booking_id').eq('status', 'pending')
+    if (ew) throw ew
+    const ids = [...new Set(waiting.map((x) => x.booking_id))]
+    if (!ids.length) return res.json({ items: [], total: 0, page: f.page, pageSize: f.pageSize })
+    q = q.in('id', ids)
+  }
   if (f.status) q = q.eq('status', f.status)
   if (f.from) q = q.gte('booking_date', f.from)
   if (f.to) q = q.lte('booking_date', f.to)
@@ -68,8 +75,20 @@ r.patch('/payments/:id', async (req, res) => {
     status, verified_by: req.user.id, verified_at: new Date().toISOString(),
   }).eq('id', pay.id).select().single()
   if (error) throw error
-  const booking = await recomputePaid(pay.booking_id, req.user.id)
+  let booking = await recomputePaid(pay.booking_id, req.user.id)
   await logEvent(pay.booking_id, req.user.id, `payment_${status}`, { paymentId: pay.id, amount: pay.amount })
+  if (status === 'rejected' && booking.status === 'pending' && booking.paid_amount < booking.advance) {
+    // The hold was paused while this payment was in review. Give the customer a fresh 24 h to pay again,
+    // otherwise the next sweep would cancel the booking at once.
+    const { count } = await supabase.from('payments').select('id', { count: 'exact', head: true }).eq('booking_id', booking.id).eq('status', 'pending')
+    const floor = Date.now() + 24 * 3600_000
+    if (!count && (!booking.hold_expires_at || new Date(booking.hold_expires_at).getTime() < floor)) {
+      const { data: fresh, error: eh } = await supabase.from('bookings').update({ hold_expires_at: new Date(floor).toISOString() }).eq('id', booking.id).select().single()
+      if (eh) throw eh
+      booking = fresh
+      await logEvent(booking.id, req.user.id, 'hold_extended_after_reject', { hours: 24 })
+    }
+  }
   res.json({ payment: toApiPayment(data), booking: toApi(booking) })
 })
 
@@ -78,8 +97,10 @@ r.get('/stats', async (_req, res) => {
   await supabase.rpc('expire_stale_holds')
   const { data, error } = await supabase.from('bookings').select('status,total,paid_amount,booking_date')
   if (error) throw error
+  const { data: waiting, error: ew } = await supabase.from('payments').select('booking_id').eq('status', 'pending')
+  if (ew) throw ew
   const today = dhakaToday(), horizon = addDays(today, 30)
-  const s = { total: data.length, pending: 0, confirmed: 0, cancelled: 0, expired: 0, completed: 0, revenue: 0, collected: 0, upcoming: 0 }
+  const s = { total: data.length, pending: 0, confirmed: 0, cancelled: 0, expired: 0, completed: 0, revenue: 0, collected: 0, upcoming: 0, toVerify: new Set(waiting.map((x) => x.booking_id)).size }
   for (const b of data) {
     s[b.status] += 1
     if (b.status === 'confirmed') s.revenue += b.total

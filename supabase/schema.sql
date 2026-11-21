@@ -113,8 +113,8 @@ create trigger t_profiles_touch before update on public.profiles for each row ex
 create trigger t_bookings_touch before update on public.bookings for each row execute function public.touch_updated_at();
 
 -- ============ expire unpaid holds ============
--- A pending booking holds its slot for HOLD_HOURS (default 72 h = 3 days, set in the API .env).
--- When hold_expires_at passes and there is NO verified payment AND NO payment waiting for admin review,
+-- A pending booking holds its slot for HOLD_HOURS (default 48 h, set in the API .env).
+-- When hold_expires_at passes and there is NO verified payment AND NO submitted payment waiting for admin review,
 -- the booking is auto-cancelled (status = 'expired') and the date/shift is free again.
 -- It runs lazily on every availability / booking-list / create call, so no cron job is required.
 create or replace function public.expire_stale_holds()

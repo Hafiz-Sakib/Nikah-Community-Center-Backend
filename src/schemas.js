@@ -36,7 +36,7 @@ export const dateRange = z.object({ from: isoDate, to: isoDate })
 export const paymentInput = z.object({
   amount: z.coerce.number().int().positive().max(100_000_000),
   method: z.enum(['bkash', 'nagad', 'bank', 'office', 'card']),
-  reference: z.string().trim().max(60).optional(),
+  reference: z.string().trim().max(60).optional(),   // any text is accepted; staff verify it against the real statement
 })
 export const paymentReview = z.object({ status: z.enum(['verified', 'rejected']) })
 export const cancelInput = z.object({ reason: z.string().trim().max(200).optional() }).default({})
@@ -44,6 +44,7 @@ export const cancelInput = z.object({ reason: z.string().trim().max(200).optiona
 export const adminList = z.object({
   status: z.enum(['pending', 'confirmed', 'cancelled', 'expired', 'completed']).optional(),
   q: z.string().trim().max(60).optional(),
+  verify: z.enum(['1', 'true']).optional(),   // only bookings that have a payment waiting for admin verification
   from: isoDate.optional(),
   to: isoDate.optional(),
   page: z.coerce.number().int().min(1).default(1),

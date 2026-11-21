@@ -16,7 +16,7 @@ REST API for the **Nikah Community Center** booking website (wedding & events ve
 - [Environment variables](#environment-variables)
 - [Endpoints](#endpoints)
 - [Booking lifecycle](#booking-lifecycle)
-- [Payment deadline: auto-cancel after 3 days](#payment-deadline-auto-cancel-after-3-days)
+- [Payment deadline: auto-cancel after 48 hours](#payment-deadline-auto-cancel-after-48-hours)
 - [Key rules](#key-rules)
 - [Database](#database)
 - [Tests](#tests)
@@ -29,7 +29,7 @@ REST API for the **Nikah Community Center** booking website (wedding & events ve
 - Bookings with **no double booking**, enforced by Postgres itself
 - Server-side pricing (client prices are ignored), saved as a snapshot so old invoices never change
 - Payment records (bKash, Nagad, bank, office, card) with admin verification; booking auto-confirms when the advance is covered
-- **Unpaid bookings are cancelled automatically after 3 days**
+- **Unpaid bookings are cancelled automatically after 48 hours**; a submitted payment (any transaction ID) counts as paid for now, pauses the timer and goes to the admin "To verify" queue
 - Public availability endpoint (booked days only, no personal data)
 - Admin: search, filter, paginate, walk-in bookings, edit, cancel, delete, stats
 - Audit log (`booking_events`) for every important action
@@ -47,7 +47,8 @@ Nikah-Community-Center-Backend/
 ├── supabase/
 │   ├── schema.sql                # full schema for a NEW database (run once)
 │   └── migrations/
-│       └── 002_hold_72h.sql      # upgrade for an EXISTING database: 3-day payment hold
+│       ├── 002_hold_72h.sql      # older upgrade: 3-day payment hold
+│       └── 003_hold_48h.sql      # upgrade for an EXISTING database: 48-hour payment hold
 ├── src/
 │   ├── index.js                  # starts the server
 │   ├── app.js                    # middleware, rate limits, route mounting, 404
@@ -89,7 +90,7 @@ Nikah-Community-Center-Backend/
 3. `npm install && npm run dev` → http://localhost:4000/api/health
 4. `npm test` (no Supabase needed: validation, pricing, auth guards).
 
-**Already have a database from before?** Do not re-run `schema.sql`. Run `supabase/migrations/002_hold_72h.sql` once instead (see [below](#payment-deadline-auto-cancel-after-3-days)).
+**Already have a database from before?** Do not re-run `schema.sql`. Run `supabase/migrations/003_hold_48h.sql` once instead (see [below](#payment-deadline-auto-cancel-after-48-hours)).
 
 ## Environment variables
 
@@ -99,7 +100,7 @@ Nikah-Community-Center-Backend/
 | `SUPABASE_URL` | — | Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | — | **Secret.** Server only, never in git or the frontend |
 | `CLIENT_ORIGINS` | `http://localhost:5173` | Comma-separated allowed browser origins (put the Vercel URL here) |
-| `HOLD_HOURS` | `72` | How long an unpaid pending booking keeps its date (3 days) |
+| `HOLD_HOURS` | `48` | How long an unpaid pending booking keeps its date (48 hours) |
 | `EDIT_CUTOFF_DAYS` | `3` | Users cannot edit a booking this close to the event |
 | `MAX_PENDING_PER_USER` | `3` | Max unpaid bookings per user at once |
 
@@ -129,12 +130,12 @@ All paths start with `/api`.
 
 | Method | Path | Description |
 |---|---|---|
-| GET, POST | `/admin/bookings` | List (rows include the booker's `avatar`) / create a walk-in booking |
+| GET, POST | `/admin/bookings` | List (rows include the booker's `avatar`; `?verify=1` = only bookings with a payment waiting for verification) / create a walk-in booking |
 | PATCH, DELETE | `/admin/bookings/:id` | Edit any field and status / hard delete |
 | POST | `/admin/bookings/:id/cancel` | Cancel |
 | POST | `/admin/bookings/:id/payments` | Record a payment (cash at office etc., stored as already verified) |
 | PATCH | `/admin/payments/:id` | `{ status: 'verified' \| 'rejected' }` |
-| GET | `/admin/stats` | Totals, revenue, upcoming events |
+| GET | `/admin/stats` | Totals, revenue, upcoming events, `toVerify` (bookings with a payment to verify) |
 
 Booking `:id` is the public code, e.g. `NCC-AB12CD`.
 
@@ -144,35 +145,35 @@ Each booking in a response carries `holdExpiresAt` (when the payment deadline en
 
 ```mermaid
 stateDiagram-v2
-    [*] --> pending: user books (3-day hold starts)
+    [*] --> pending: user books (48-hour hold starts)
     pending --> confirmed: verified payments cover the advance
-    pending --> expired: 3 days pass, nothing paid, nothing in review
+    pending --> expired: 48 hours pass, nothing paid, nothing submitted for review
     pending --> cancelled: user or admin cancels
     confirmed --> pending: user changes date, shift or package
     confirmed --> completed: admin marks the event done
     confirmed --> cancelled: user or admin cancels
-    expired --> pending: admin re-opens (fresh 3-day hold)
+    expired --> pending: admin re-opens (fresh 48-hour hold)
 ```
 
 A walk-in booking created by an admin starts as `confirmed` with no hold.
 
-## Payment deadline: auto-cancel after 3 days
+## Payment deadline: auto-cancel after 48 hours
 
-A booking made online starts as `pending` and holds its date and shift for `HOLD_HOURS` (default **72 hours = 3 days**). The slot counts as taken during that time, so nobody else can book it.
+A booking made online starts as `pending` and holds its date and shift for `HOLD_HOURS` (default **48 hours**). The slot counts as taken during that time, so nobody else can book it.
 
 When `hold_expires_at` passes, the Postgres function `expire_stale_holds()` sets the booking to `expired` and frees the slot, **only if**:
 
 - no payment has been verified (`paid_amount = 0`), and
 - no payment is waiting for admin review
 
-So a guest who has submitted a bKash / Nagad payment is never cancelled while staff are still checking it. Every automatic cancel stores a reason and writes an `auto_expired` row to `booking_events`.
+So a guest who has submitted a bKash / Nagad / bank / card payment is never cancelled while staff are still checking it. Any transaction text is accepted at submit time (the booking shows "payment in review" and counts as paid for now); the admin verifies it against the real statement. A customer can have at most 3 payments waiting, and their total cannot exceed the balance. If the admin **rejects** a payment and nothing else is waiting, the customer gets a fresh 24 hours to pay again. Every automatic cancel stores a reason and writes an `auto_expired` row to `booking_events`.
 
 **No cron job is needed.** The function runs lazily on every availability, booking-list, admin-list, admin-stats, booking-create and `/health` call. The GitHub keep-alive ping (every 3 days) also triggers it, and the frontend calls the API the moment a timer reaches zero.
 
 **Upgrading an existing database**
 
-1. Run `supabase/migrations/002_hold_72h.sql` in the Supabase SQL Editor. It replaces the function and gives bookings that are still waiting for payment the new 3-day window, counted from when they were created.
-2. Set `HOLD_HOURS=72` in Render (72 is also the new default).
+1. Run `supabase/migrations/003_hold_48h.sql` in the Supabase SQL Editor. It gives bookings that are still waiting for payment the new 48-hour window, counted from when they were created (older ones keep a 12 h grace).
+2. Set `HOLD_HOURS=48` in Render (48 is also the new default).
 3. Redeploy the API.
 
 ## Key rules

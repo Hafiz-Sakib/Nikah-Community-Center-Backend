@@ -6,6 +6,7 @@ import { toApi } from '../lib/mappers.js'
 import { httpError } from '../middleware/error.js'
 
 const r = Router()
+const MAX_PENDING_PAYMENTS = 3
 
 const withPayments = async (row) => {
   const { data, error } = await supabase.from('payments').select('*').eq('booking_id', row.id).order('created_at')
@@ -38,7 +39,14 @@ r.post('/:id/payments', async (req, res) => {
   const row = await own(req)
   if (!['pending', 'confirmed'].includes(row.status)) throw httpError(409, 'This booking is not active')
   const p = paymentInput.parse(req.body)
+  if (p.method !== 'office' && !p.reference) throw httpError(400, 'Enter the transaction ID')
   if (p.amount > row.total - row.paid_amount) throw httpError(400, 'Amount is more than the balance due')
+  // A submitted payment is treated as paid for now and pauses the 48 h hold until staff verify it,
+  // so the number of waiting payments is capped (any text is accepted as a reference).
+  const { data: waiting, error: e0 } = await supabase.from('payments').select('amount').eq('booking_id', row.id).eq('status', 'pending')
+  if (e0) throw e0
+  if (waiting.length >= MAX_PENDING_PAYMENTS) throw httpError(429, 'You already have payments waiting for verification. Please wait for our team.')
+  if (waiting.reduce((s, x) => s + x.amount, 0) + p.amount > row.total - row.paid_amount) throw httpError(400, 'Payments waiting for verification already cover the balance')
   const { data, error } = await supabase.from('payments')
     .insert({ booking_id: row.id, ...p, status: 'pending', submitted_by: req.user.id }).select().single()
   if (error) throw error
