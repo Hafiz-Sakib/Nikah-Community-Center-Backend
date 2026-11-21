@@ -1,6 +1,6 @@
 import { supabase } from '../lib/supabase.js'
 import { env } from '../config/env.js'
-import { buildQuote } from '../config/pricing.js'
+import { buildQuote, packageFits, PACKAGES } from '../config/pricing.js'
 import { dhakaToday, addDays } from '../lib/dates.js'
 import { httpError } from '../middleware/error.js'
 import { toApi } from '../lib/mappers.js'
@@ -10,6 +10,10 @@ const ACTIVE = ['pending', 'confirmed']
 const newCode = () => 'NCC-' + Math.random().toString(36).slice(2, 8).toUpperCase().padEnd(6, '0')
 export const SLOT_TAKEN = 'Sorry, that date and shift was just booked by someone else'
 const PRICE_KEYS = ['packageId', 'shift', 'date', 'guests', 'addons', 'catering', 'menu']
+
+const assertFits = (packageId, eventType) => {
+  if (!packageFits(packageId, eventType)) throw httpError(400, `${PACKAGES[packageId]?.name ?? 'That package'} is not available for ${eventType} events. Please choose a package made for it.`)
+}
 
 export const logEvent = (bookingId, actorId, action, detail) =>
   supabase.from('booking_events').insert({ booking_id: bookingId, actor_id: actorId, action, detail }).then(() => {}, () => {})
@@ -30,6 +34,7 @@ export async function createBooking(user, input, { forAdmin = false } = {}) {
     if (count >= env.MAX_PENDING_PER_USER) throw httpError(429, 'You already have several unpaid bookings. Pay or cancel one first.')
   }
 
+  assertFits(input.packageId, input.eventType)
   const snap = buildQuote(input)                       // server-side price, client price ignored
   for (let i = 0; i < 5; i++) {
     const { data, error } = await supabase.from('bookings').insert({
@@ -73,6 +78,8 @@ export async function updateBooking(user, code, patch, { admin = false } = {}) {
   const next = { ...cur, ...fieldsPatch }
   if (!admin && next.date !== cur.date && next.date < addDays(dhakaToday(), 1)) throw httpError(400, 'Pick a future date')
 
+  // only re-check when the event or package is being changed, so an older booking (made before packages were split by event) can still be edited
+  if (next.eventType !== cur.eventType || next.packageId !== cur.packageId) assertFits(next.packageId, next.eventType)
   const update = { ...cols(next) }
   const priceChanged = PRICE_KEYS.some((k) => JSON.stringify(next[k] ?? null) !== JSON.stringify(cur[k] ?? null))
   if (priceChanged) {                                  // keep old snapshot when price inputs are untouched

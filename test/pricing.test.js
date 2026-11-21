@@ -16,7 +16,7 @@ test('friday full day + hall catering + addon', () => {
 })
 test('rejects bad input', () => {
   assert.throws(() => buildQuote({ packageId: 'x', shift: 'full', date: '2027-01-01', guests: 100 }))
-  assert.throws(() => buildQuote({ packageId: 'wedding-basic', shift: 'full', date: '2027-01-01', guests: 500 }))
+  assert.throws(() => buildQuote({ packageId: 'wedding-basic', shift: 'full', date: '2027-01-01', guests: 1001 }))
   assert.throws(() => buildQuote({ packageId: 'wedding-basic', shift: 'full', date: '2027-01-01', guests: 100, addons: ['catering'] }))
 })
 test('schemas', () => {
@@ -26,4 +26,23 @@ test('schemas', () => {
   assert.deepEqual(bookingPatch.parse({ guests: 50 }), { guests: 50 })           // no defaults leak into patch
   assert.throws(() => bookingPatch.parse({ status: 'confirmed' }))               // users cannot set status
   assert.throws(() => bookingPatch.parse({ total: 1 }))                          // nor price
+})
+
+test('package guest limits and event fit', async () => {
+  const { packageFits, PACKAGES, HALL_CAP } = await import('../src/config/pricing.js')
+  assert.equal(HALL_CAP, 2000)
+  for (const p of Object.values(PACKAGES)) assert.ok(p.cap <= HALL_CAP)
+  const base = { shift: 'morning', date: '2027-01-04' }
+  assert.equal(buildQuote({ ...base, packageId: 'wedding-plus', guests: 2000 }).base, 85000)           // full hall
+  assert.throws(() => buildQuote({ ...base, packageId: 'wedding-plus', guests: 2001 }), /20–2000/)
+  assert.throws(() => buildQuote({ ...base, packageId: 'wedding-basic', guests: 1001 }), /20–1000/)
+  assert.throws(() => buildQuote({ ...base, packageId: 'birthday-party', guests: 501 }), /20–500/)
+  assert.doesNotThrow(() => buildQuote({ ...base, packageId: 'birthday-party', guests: 500 }))
+  assert.equal(packageFits('birthday-party', 'Birthday'), true)
+  assert.equal(packageFits('wedding-basic', 'Birthday'), false)   // birthdays have their own package
+  assert.equal(packageFits('corporate', 'Milad'), false)
+  assert.equal(packageFits('milad-mahfil', 'Milad'), true)
+  assert.equal(packageFits('other-event', 'Other'), true)
+  assert.equal(packageFits('nope', 'Other'), false)
+  assert.throws(() => bookingInput.parse({ eventType: 'Wedding', packageId: 'wedding-plus', date: '2027-01-04', shift: 'morning', guests: 2001, name: 'Ali', phone: '01712345678' }))
 })

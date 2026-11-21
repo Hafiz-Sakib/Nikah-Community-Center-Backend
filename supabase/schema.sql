@@ -41,7 +41,7 @@ create table public.bookings (
   package_id text not null,
   shift text not null check (shift in ('morning','evening','full')),
   booking_date date not null,
-  guests int not null check (guests between 20 and 600),
+  guests int not null check (guests between 20 and 2000),
   addons text[] not null default '{}',
   catering text not null default 'own' check (catering in ('own','hall')),
   menu_id text,

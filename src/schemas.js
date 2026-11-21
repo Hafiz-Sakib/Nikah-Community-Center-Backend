@@ -11,7 +11,7 @@ const fields = {
   packageId: z.string(),
   date: isoDate,
   shift: z.enum(['morning', 'evening', 'full']),
-  guests: z.coerce.number().int().min(20).max(600),
+  guests: z.coerce.number().int().min(20).max(2000),
   addons: z.array(z.string()).max(10),
   catering: z.enum(['own', 'hall']),
   menu: z.string().nullish(),
