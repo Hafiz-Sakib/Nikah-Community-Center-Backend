@@ -5,6 +5,7 @@ import { createBooking, updateBooking, cancelBooking, loadBooking, logEvent } fr
 import { sweepHolds, sweepCompleted } from '../services/sweep.js'
 import { toApi } from '../lib/mappers.js'
 import { httpError } from '../middleware/error.js'
+import { standing, paymentRows, assertFreshReference, mapPaymentDbError, tk } from '../services/paymentService.js'
 
 const r = Router()
 const MAX_PENDING_PAYMENTS = 3
@@ -39,19 +40,27 @@ r.get('/:id/invoice', async (req, res) => {
 
 r.post('/:id/payments', async (req, res) => {
   const row = await own(req)
-  if (!['pending', 'confirmed'].includes(row.status)) throw httpError(409, 'This booking is not active')
+  // a finished event can still owe money, so 'completed' may pay the balance; cancelled / expired may not
+  if (!['pending', 'confirmed', 'completed'].includes(row.status)) throw httpError(409, 'This booking is not active')
   const p = paymentInput.parse(req.body)
-  if (p.method !== 'office' && !p.reference) throw httpError(400, 'Enter the transaction ID')
-  if (p.amount > row.total - row.paid_amount) throw httpError(400, 'Amount is more than the balance due')
-  // A submitted payment is treated as paid for now and pauses the 48 h hold until staff verify it,
-  // so the number of waiting payments is capped (any text is accepted as a reference).
-  const { data: waiting, error: e0 } = await supabase.from('payments').select('amount').eq('booking_id', row.id).eq('status', 'pending')
-  if (e0) throw e0
-  if (waiting.length >= MAX_PENDING_PAYMENTS) throw httpError(429, 'You already have payments waiting for verification. Please wait for our team.')
-  if (waiting.reduce((s, x) => s + x.amount, 0) + p.amount > row.total - row.paid_amount) throw httpError(400, 'Payments waiting for verification already cover the balance')
+  // Cash at the venue is recorded by staff only. If a customer could submit it, it would count as "paid" and pause the hold for nothing.
+  if (p.method === 'office') throw httpError(400, 'Office payments are recorded by our staff when you pay at the venue')
+  if (!p.reference) throw httpError(400, 'Enter the transaction ID')
+  p.reference = p.reference.toUpperCase()
+
+  const rows = await paymentRows(row.id)
+  const s = standing(row, rows)
+  if (s.room <= 0) throw httpError(409, s.pending > 0 ? 'Your payments are waiting for verification and already cover the balance' : 'This booking is already paid in full')
+  if (p.amount > s.room) throw httpError(400, `Amount is more than the balance due (${tk(s.room)})`)
+  // while the advance is not covered, one payment must cover the rest of it, so a token amount cannot hold a date
+  if (row.status === 'pending' && s.needAdvance > 0 && p.amount < s.needAdvance) throw httpError(400, `Pay at least ${tk(s.needAdvance)} to cover the advance`)
+  // A submitted payment is treated as paid for now and pauses the 48 h hold until staff verify it, so the number of waiting payments is capped.
+  if (rows.filter((x) => x.status === 'pending').length >= MAX_PENDING_PAYMENTS) throw httpError(429, 'You already have payments waiting for verification. Please wait for our team.')
+  await assertFreshReference(p.method, p.reference)
+
   const { data, error } = await supabase.from('payments')
     .insert({ booking_id: row.id, ...p, status: 'pending', submitted_by: req.user.id }).select().single()
-  if (error) throw error
+  if (error) mapPaymentDbError(error)
   await logEvent(row.id, req.user.id, 'payment_submitted', { amount: p.amount, method: p.method })
   res.status(201).json({ id: data.id, amount: data.amount, method: data.method, reference: data.reference ?? '', status: data.status, createdAt: data.created_at })
 })

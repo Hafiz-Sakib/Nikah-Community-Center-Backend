@@ -1,11 +1,12 @@
 import { Router } from 'express'
 import { supabase } from '../lib/supabase.js'
-import { bookingInput, adminBookingPatch, paymentInput, paymentReview, adminList, cancelInput } from '../schemas.js'
+import { bookingInput, adminBookingPatch, adminPaymentInput, paymentReview, adminList, cancelInput } from '../schemas.js'
 import { createBooking, updateBooking, cancelBooking, loadBooking, recomputePaid, logEvent } from '../services/bookingService.js'
 import { toApi, toApiPayment } from '../lib/mappers.js'
 import { dhakaToday, addDays } from '../lib/dates.js'
 import { sweepHolds, sweepCompleted } from '../services/sweep.js'
 import { httpError } from '../middleware/error.js'
+import { paymentRows, assertRoom, assertFreshReference, mapPaymentDbError } from '../services/paymentService.js'
 
 const r = Router()
 
@@ -67,15 +68,24 @@ r.delete('/bookings/:id', async (req, res) => {
   res.json({ ok: true })
 })
 
-// POST /admin/bookings/:id/payments  (cash at office etc. — recorded as already verified)
+// POST /admin/bookings/:id/payments  (cash at the office, or a transfer staff saw arrive — recorded as already verified)
 r.post('/bookings/:id/payments', async (req, res) => {
   const row = await loadBooking(req.user, req.params.id, true)
-  const p = paymentInput.parse(req.body)
+  if (['cancelled', 'expired'].includes(row.status)) throw httpError(409, 'A cancelled booking cannot take payments. Re-open the booking first.')
+  const p = adminPaymentInput.parse(req.body)
+  if (p.reference) p.reference = p.reference.toUpperCase()
+  const rows = await paymentRows(row.id)
+  assertRoom(row, rows, p.amount)
+  // same payment twice within seconds = a double click, not a second payment
+  const dup = rows.some((x) => x.method === p.method && x.amount === p.amount && x.status !== 'rejected' && Date.now() - new Date(x.created_at).getTime() < 15_000)
+  if (dup) throw httpError(409, 'The same payment was just recorded. Refresh to check before adding it again.')
+  await assertFreshReference(p.method, p.reference)
   const { data, error } = await supabase.from('payments').insert({
     booking_id: row.id, ...p, status: 'verified', submitted_by: req.user.id, verified_by: req.user.id, verified_at: new Date().toISOString(),
   }).select().single()
-  if (error) throw error
+  if (error) mapPaymentDbError(error)
   const booking = await recomputePaid(row.id, req.user.id)
+  await logEvent(row.id, req.user.id, 'admin_payment_recorded', { amount: p.amount, method: p.method, paymentId: data.id })
   res.status(201).json({ payment: toApiPayment(data), booking: toApi(booking) })
 })
 
@@ -84,10 +94,15 @@ r.patch('/payments/:id', async (req, res) => {
   const { status } = paymentReview.parse(req.body)
   const { data: pay } = await supabase.from('payments').select('*').eq('id', req.params.id).maybeSingle()
   if (!pay) throw httpError(404, 'Payment not found')
+  if (status === 'verified' && pay.status !== 'verified') {
+    // verifying must never push the booking past its total (a cash payment may have been recorded meanwhile)
+    const { data: bk } = await supabase.from('bookings').select('id,total,advance').eq('id', pay.booking_id).single()
+    assertRoom(bk, await paymentRows(pay.booking_id), pay.amount, pay.id)
+  }
   const { data, error } = await supabase.from('payments').update({
     status, verified_by: req.user.id, verified_at: new Date().toISOString(),
   }).eq('id', pay.id).select().single()
-  if (error) throw error
+  if (error) mapPaymentDbError(error)
   let booking = await recomputePaid(pay.booking_id, req.user.id)
   await logEvent(pay.booking_id, req.user.id, `payment_${status}`, { paymentId: pay.id, amount: pay.amount })
   if (status === 'rejected' && booking.status === 'pending' && booking.paid_amount < booking.advance) {

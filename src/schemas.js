@@ -38,6 +38,7 @@ export const paymentInput = z.object({
   method: z.enum(['bkash', 'nagad', 'bank', 'office', 'card']),
   reference: z.string().trim().max(60).optional(),   // any text is accepted; staff verify it against the real statement
 })
+export const adminPaymentInput = paymentInput.extend({ note: z.string().trim().max(200).optional() })
 export const paymentReview = z.object({ status: z.enum(['verified', 'rejected']) })
 export const cancelInput = z.object({ reason: z.string().trim().max(200).optional() }).default({})
 

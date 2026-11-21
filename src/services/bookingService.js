@@ -4,6 +4,7 @@ import { buildQuote } from '../config/pricing.js'
 import { dhakaToday, addDays } from '../lib/dates.js'
 import { httpError } from '../middleware/error.js'
 import { toApi } from '../lib/mappers.js'
+import { standing, paymentRows } from './paymentService.js'
 
 const ACTIVE = ['pending', 'confirmed']
 const newCode = () => 'NCC-' + Math.random().toString(36).slice(2, 8).toUpperCase().padEnd(6, '0')
@@ -78,8 +79,15 @@ export async function updateBooking(user, code, patch, { admin = false } = {}) {
     const snap = buildQuote(next)
     Object.assign(update, { price_snapshot: snap, total: snap.total, advance: snap.advance })
   }
-  const scheduleChanged = next.date !== cur.date || next.shift !== cur.shift || next.packageId !== cur.packageId
-  if (!admin && row.status === 'confirmed' && scheduleChanged) { update.status = 'pending'; update.hold_expires_at = new Date(Date.now() + env.HOLD_HOURS * 3600_000).toISOString() }
+  // A new date/shift needs the slot re-checked (the DB refuses a clash). Only a booking whose advance is NOT yet verified goes back on a 48 h hold;
+  // a fully or sufficiently paid one stays confirmed. Changing package or guests never touches status: the total simply moves
+  // and the balance (or a refund due, if the total fell below what was paid) shows up on the billing screens.
+  const scheduleChanged = next.date !== cur.date || next.shift !== cur.shift
+  if (!admin && row.status === 'confirmed' && scheduleChanged) {
+    const adv = update.advance ?? row.advance
+    const st = standing({ total: update.total ?? row.total, advance: adv }, await paymentRows(row.id))
+    if (st.verified < adv) { update.status = 'pending'; update.hold_expires_at = new Date(Date.now() + env.HOLD_HOURS * 3600_000).toISOString() }
+  }
   if (admin && status) {
     update.status = status
     if (status === 'cancelled') update.cancelled_at = new Date().toISOString()
