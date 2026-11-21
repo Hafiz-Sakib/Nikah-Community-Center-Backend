@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { supabase } from '../lib/supabase.js'
 import { bookingInput, bookingPatch, paymentInput, cancelInput } from '../schemas.js'
 import { createBooking, updateBooking, cancelBooking, loadBooking, logEvent } from '../services/bookingService.js'
+import { sweepHolds, sweepCompleted } from '../services/sweep.js'
 import { toApi } from '../lib/mappers.js'
 import { httpError } from '../middleware/error.js'
 
@@ -18,7 +19,8 @@ const own = (req) => loadBooking(req.user, req.params.id)
 r.post('/', async (req, res) => res.status(201).json(await createBooking(req.user, bookingInput.parse(req.body))))
 
 r.get('/', async (req, res) => {
-  await supabase.rpc('expire_stale_holds')
+  await sweepHolds()
+  await sweepCompleted()
   const { data, error } = await supabase.from('bookings').select('*, payments(*)')
     .eq('user_id', req.user.id).order('booking_date', { ascending: false })
   if (error) throw error

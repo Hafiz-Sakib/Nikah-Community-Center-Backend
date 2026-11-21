@@ -121,3 +121,4 @@ export async function recomputePaid(bookingId, actorId) {
   await logEvent(bookingId, actorId, 'payment_recomputed', { paid, status: data.status })
   return data
 }
+

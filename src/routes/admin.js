@@ -4,6 +4,7 @@ import { bookingInput, adminBookingPatch, paymentInput, paymentReview, adminList
 import { createBooking, updateBooking, cancelBooking, loadBooking, recomputePaid, logEvent } from '../services/bookingService.js'
 import { toApi, toApiPayment } from '../lib/mappers.js'
 import { dhakaToday, addDays } from '../lib/dates.js'
+import { sweepHolds, sweepCompleted } from '../services/sweep.js'
 import { httpError } from '../middleware/error.js'
 
 const r = Router()
@@ -11,7 +12,8 @@ const r = Router()
 // GET /admin/bookings?status=&q=&from=&to=&page=&pageSize=
 r.get('/bookings', async (req, res) => {
   const f = adminList.parse(req.query)
-  await supabase.rpc('expire_stale_holds')   // release unpaid holds so the list never shows an expired hold as pending
+  await sweepHolds()   // release unpaid holds so the list never shows an expired hold as pending
+  await sweepCompleted()
   let q = supabase.from('bookings').select('*, payments(*), profiles(avatar_url)', { count: 'exact' })
   if (f.verify) {                                   // "To verify" queue: bookings with a submitted payment waiting for review
     const { data: waiting, error: ew } = await supabase.from('payments').select('booking_id').eq('status', 'pending')
@@ -57,6 +59,9 @@ r.post('/bookings/:id/cancel', async (req, res) => res.json(await cancelBooking(
 // DELETE /admin/bookings/:id  (hard delete, payments cascade)
 r.delete('/bookings/:id', async (req, res) => {
   const row = await loadBooking(req.user, req.params.id, true)
+  // Confirmed / completed bookings and anything with money received are business records: they are kept forever.
+  if (['confirmed', 'completed'].includes(row.status) || row.paid_amount > 0)
+    throw httpError(409, 'Confirmed, completed or paid bookings are kept for the records and cannot be deleted')
   const { error } = await supabase.from('bookings').delete().eq('id', row.id)
   if (error) throw error
   res.json({ ok: true })
@@ -102,7 +107,8 @@ r.patch('/payments/:id', async (req, res) => {
 
 // GET /admin/stats
 r.get('/stats', async (_req, res) => {
-  await supabase.rpc('expire_stale_holds')
+  await sweepHolds()
+  await sweepCompleted()
   const { data, error } = await supabase.from('bookings').select('status,total,paid_amount,booking_date')
   if (error) throw error
   const { data: waiting, error: ew } = await supabase.from('payments').select('booking_id').eq('status', 'pending')
@@ -111,7 +117,7 @@ r.get('/stats', async (_req, res) => {
   const s = { total: data.length, pending: 0, confirmed: 0, cancelled: 0, expired: 0, completed: 0, revenue: 0, collected: 0, upcoming: 0, toVerify: new Set(waiting.map((x) => x.booking_id)).size }
   for (const b of data) {
     s[b.status] += 1
-    if (b.status === 'confirmed') s.revenue += b.total
+    if (b.status === 'confirmed' || b.status === 'completed') s.revenue += b.total
     s.collected += b.paid_amount
     if (['pending', 'confirmed'].includes(b.status) && b.booking_date >= today && b.booking_date <= horizon) s.upcoming += 1
   }
