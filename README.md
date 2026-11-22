@@ -43,7 +43,7 @@ Nikah-Community-Center-Backend/
 ├── .env.example                  # copy to .env
 ├── .github/
 │   └── workflows/
-│       └── keepalive.yml         # pings /api/health every 3 days (keeps Render + Supabase awake)
+│       └── keepalive.yml         # pings /api/health every 10 min (keeps Render + Supabase awake)
 ├── supabase/
 │   ├── schema.sql                # full schema for a NEW database (run once)
 │   └── migrations/
@@ -168,7 +168,7 @@ When `hold_expires_at` passes, the Postgres function `expire_stale_holds()` sets
 
 So a guest who has submitted a bKash / Nagad / bank / card payment is never cancelled while staff are still checking it. Any transaction text is accepted at submit time (the booking shows "payment in review" and counts as paid for now); the admin verifies it against the real statement. A customer can have at most 3 payments waiting, and their total cannot exceed the balance. If the admin **rejects** a payment and nothing else is waiting, the customer gets a fresh 24 hours to pay again. Every automatic cancel stores a reason and writes an `auto_expired` row to `booking_events`.
 
-**No cron job is needed.** The function runs lazily on every availability, booking-list, admin-list, admin-stats, booking-create and `/health` call. The GitHub keep-alive ping (every 3 days) also triggers it, and the frontend calls the API the moment a timer reaches zero.
+**No cron job is needed.** The function runs lazily on every availability, booking-list, admin-list, admin-stats, booking-create and `/health` call. The GitHub keep-alive ping (every 10 minutes) also triggers it, and the frontend calls the API the moment a timer reaches zero.
 
 **Upgrading an existing database**
 
@@ -211,7 +211,7 @@ Runs with Node's built-in test runner and needs no Supabase: price rules, reques
 1. New Web Service, root directory = this repo, build command `npm i`, start command `node src/index.js`.
 2. Add the environment variables from the table above and put the Vercel URL in `CLIENT_ORIGINS`.
 3. Free tier sleeps after about 15 minutes idle (the first call can take 30–60 s; the frontend shows a "waking up" hint).
-4. `.github/workflows/keepalive.yml` pings `/api/health` every 3 days so the free Supabase project never pauses. Add the repo secret `API_URL` (for example `https://your-api.onrender.com`).
+4. `.github/workflows/keepalive.yml` pings `/api/health` every 10 minutes so the free Render service never sleeps and the free Supabase project never pauses. Add the repo secret `API_URL` (for example `https://your-api.onrender.com`).
 
 ## Security notes
 
